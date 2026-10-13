@@ -54,6 +54,11 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
 QPushButton#chip {{ background: #1f222c; color: #d5d7e0; border: 1px solid #30343f; border-radius: 12px;
     padding: 4px 11px; font-size: 12px; }}
 QPushButton#chip:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
+QPushButton#chip:disabled, QPushButton#react:disabled {{ color: #4b4f5e; border-color: #262833; }}
+QPushButton#react {{ background: transparent; color: #b9bccb; border: 1px solid #343846; border-radius: 10px;
+    padding: 2px 9px; font-size: 11px; }}
+QPushButton#react:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
+#hint {{ color: #6f7386; font-size: 10px; font-weight: 600; }}
 QLineEdit#input {{ background: #1b1d25; color: #eceef3; border: 1px solid #30343f; border-radius: 10px;
     padding: 8px 10px; font-size: 13px; }}
 QLineEdit#input:focus {{ border-color: {ACCENT}; }}
@@ -122,7 +127,7 @@ def md_to_html(md: str) -> str:
     doc.setMarkdown("\n".join(lines))
     out = doc.toHtml()
     out = out[out.index(">", out.index("<body")) + 1: out.rindex("</body>")]  # drop the doc's own font
-    out = out.replace("-qt-list-indent: 1;", "-qt-list-indent: 0; margin-left: 16px;")
+    out = re.sub(r"-qt-list-indent: (\d+);", lambda m: f"-qt-list-indent: 0; margin-left: {16 * int(m[1])}px;", out)
     return out.replace("<li style=\" margin-top:6px; margin-bottom:6px;", "<li style=\" margin-top:2px; margin-bottom:2px;")
 
 
@@ -176,7 +181,9 @@ class UserBubble(QWidget):
 
 
 class ReplyCard(QFrame):
-    """Claude's answer, streamed in, with a live status line and sources."""
+    """The AI's answer, streamed in, with a live status line, sources and reaction buttons."""
+
+    reacted = Signal(str)  # preset id to run on the same clip
 
     def __init__(self, mode: str | None):
         super().__init__(objectName="reply")
@@ -196,6 +203,12 @@ class ReplyCard(QFrame):
         self.sources.hide()
         for w in (self.status, self.body, self.error, self.checked, self.sources):
             lay.addWidget(w)
+        self.reactions = QHBoxLayout()
+        self.reactions.setSpacing(5)
+        lay.addLayout(self.reactions)
+        self.mode_id: str | None = None  # which mode produced this answer
+        self.failed = False
+        self.running = True
         self._text = ""
         self._dirty = False
         self._status = ""
@@ -239,10 +252,28 @@ class ReplyCard(QFrame):
         self.append_text(f"\n\n_{text}_")
 
     def set_error(self, text: str) -> None:
+        self.failed = True
         self.error.setText(text)
         self.error.show()
 
+    def cancel(self) -> None:
+        self.failed = True
+        self.finish()
+        self.checked.setText("Stopped: a newer request replaced this one.")
+        self.checked.show()
+
+    def show_reactions(self, options: list[tuple[str, str]]) -> None:
+        """Buttons that re-run another mode on this same clip, e.g. [("roast", "Roast")]."""
+        self.reactions.addWidget(_label("SAME CLIP", "hint", Qt.PlainText))
+        for preset_id, name in options:
+            b = QPushButton(name, objectName="react", cursor=Qt.PointingHandCursor)
+            b.setToolTip(f"{name} what was already heard, without grabbing new audio")
+            b.clicked.connect(lambda _=False, pid=preset_id: self.reacted.emit(pid))
+            self.reactions.addWidget(b)
+        self.reactions.addStretch(1)
+
     def finish(self) -> None:
+        self.running = False
         self._status = ""
         self._tick()
         self._timer.stop()
@@ -375,10 +406,11 @@ class ChatWindow(QWidget):
             item = self.chips.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self.chips.addWidget(_label("NEW CLIP", "hint", Qt.PlainText))
         for p in presets:
             b = QPushButton(p["name"], objectName="chip", cursor=Qt.PointingHandCursor)
             hk = p.get("hotkey", "")
-            b.setToolTip(f"Grab the last few seconds and {p['name'].lower()}" + (f"  ({pretty_hotkey(hk)})" if hk else ""))
+            b.setToolTip(f"Grab the latest audio and {p['name'].lower()}" + (f"  ({pretty_hotkey(hk)})" if hk else ""))
             b.clicked.connect(lambda _=False, pid=p["id"]: self.preset_clicked.emit(pid))
             self.chips.addWidget(b)
         self.chips.addStretch(1)
@@ -400,6 +432,8 @@ class ChatWindow(QWidget):
 
     def set_busy(self, busy: bool) -> None:
         self.send.setEnabled(not busy)
+        for b in self.feed.findChildren(QPushButton, "react"):
+            b.setEnabled(not busy)
         self.input.setPlaceholderText("Working on it…" if busy else "Type a claim or ask a follow-up…")
 
     def add(self, widget: QWidget) -> QWidget:

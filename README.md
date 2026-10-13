@@ -32,9 +32,15 @@ To start it with Windows, press `Win+R`, type `shell:startup`, and drop a shortc
 | Hotkey | What it does |
 |---|---|
 | **Ctrl+Alt+F** | Fact-check: claim, ✅/❌/⚠️ verdict, key facts, a "Say this:" line |
-| **Ctrl+Alt+D** | Argue back: debate-coach counterpoints, even if he's partly right |
+| **Ctrl+Alt+D** | Argue back: quick bullet points to make the case in your own words |
 | **Ctrl+Alt+R** | Roast: the verdict delivered as a (friendly) roast |
 | **Ctrl+Alt+W** | Show / hide the window |
+
+- Under every answer, the **SAME CLIP** buttons run another mode on what was already heard: fact-check
+  something you argued back on, roast it, or **Dig deeper** for more specifics. No new audio is grabbed, and
+  it remembers the earlier answers.
+- The **NEW CLIP** buttons at the bottom (like the hotkeys) grab the latest audio, for the next round of
+  the argument.
 
 - The popup doesn't steal focus from your game or Discord. Click into it if you want to type.
 - Type in the box to follow up ("source for the second point?", "what about X?"), or type a claim yourself.

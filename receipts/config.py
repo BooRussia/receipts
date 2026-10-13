@@ -1,6 +1,7 @@
 """Settings: defaults, load/save to a JSON file in the user's app-data folder."""
 
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -38,12 +39,15 @@ DEFAULT_PRESETS = [
         "name": "Argue back",
         "hotkey": "<ctrl>+<alt>+d",
         "prompt": (
-            "Act as the user's debate coach and argue AGAINST the speaker's position. Lead with the "
-            "single strongest counterpoint, then 2-3 more as short bullets. Every factual statement "
-            "must be real and backed by your searches; never invent numbers. If the speaker is "
-            "factually right, admit it in one line, then go after their reasoning, framing or "
-            "conclusions instead.\n"
-            "End with **Say this:** one or two sentences the user can say out loud."
+            "Give the user ammo to argue back in their own words: quick bullet points to glance at "
+            "mid-argument, not a script. Format:\n"
+            "**<the counter-claim in under 8 words>**\n"
+            "- <short point, max ~12 words, with a specific name, number or example>\n"
+            "  - <supporting example, if useful>\n"
+            "3-5 points total. Every fact must be real and backed by your searches. No intro, no "
+            "advice on how to argue, no \"concede\", no \"say this\", no closing line. If the speaker "
+            "is right on the facts, start with **⚠️ They're mostly right** and then list the best "
+            "counter-angles the same way."
         ),
     },
     {
@@ -58,6 +62,21 @@ DEFAULT_PRESETS = [
         ),
     },
 ]
+
+# "React" to an answer: go further on the same clip instead of grabbing new audio.
+DIG_DEEPER = {
+    "id": "deeper",
+    "name": "Dig deeper",
+    "prompt": (
+        "Go deeper on the same claim: 3-5 new short bullet points with specifics (names, numbers, "
+        "dates, examples) that your earlier answers didn't cover. Search for fresh information. "
+        "No intro, no script."
+    ),
+}
+
+# Fingerprints of default prompts from older versions. A saved preset still using one of these was
+# never customized, so it gets upgraded to the current default; edited prompts are left alone.
+_OLD_DEFAULT_PROMPTS = {"argue": {"d6b56e0cfead"}}
 
 DEFAULTS = {
     # "" = auto: use the SteelSeries Sonar "Chat" output if it exists, else the default output.
@@ -105,6 +124,10 @@ def load(strict: bool = False) -> dict:
                       and all(isinstance(p.get(k), str) for k in ("id", "name", "prompt"))]
     if not cfg["presets"]:
         cfg["presets"] = copy.deepcopy(DEFAULT_PRESETS)
+    current = {p["id"]: p["prompt"] for p in DEFAULT_PRESETS}
+    for p in cfg["presets"]:
+        if hashlib.sha1(p["prompt"].encode()).hexdigest()[:12] in _OLD_DEFAULT_PROMPTS.get(p["id"], ()):
+            p["prompt"] = current[p["id"]]
     return cfg
 
 

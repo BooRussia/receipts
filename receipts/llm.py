@@ -44,6 +44,11 @@ def first_message(preset: dict, *, transcript: str | None = None, seconds: int =
     return f"Mode: {preset['name']}\n{preset['prompt']}\n\n{body}"
 
 
+def reaction_message(preset: dict) -> str:
+    """A follow-up that re-runs another mode on the clip this conversation started with."""
+    return f"Mode: {preset['name']}\n{preset['prompt']}\n\nApply this to the same transcript or claim as above."
+
+
 def provider_key(cfg: dict) -> str:
     if cfg.get("ai_provider") == "grok":
         from .grok import api_key

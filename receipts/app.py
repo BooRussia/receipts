@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import config, updater
 from .audio import AudioListener, list_sources
 from .hotkeys import Hotkeys
-from .llm import first_message, friendly_error, provider_key, stream_reply
+from .llm import first_message, friendly_error, provider_key, reaction_message, stream_reply
 from .stt import Transcriber
 from .ui import ChatWindow, HeardCard, ReplyCard, SettingsDialog, UserBubble, make_icon, pretty_hotkey
 
@@ -39,7 +39,7 @@ class Controller(QObject):
         self._watch_config()
         self.job = 0  # bumping this cancels whatever is running
         self.cards: dict[int, tuple] = {}
-        self.convo: list | None = None
+        self.convo: list | None = None  # the conversation typed follow-ups continue
         self.busy = False
 
         self.listener = AudioListener()
@@ -95,7 +95,7 @@ class Controller(QObject):
     # --- actions -------------------------------------------------------------------------
 
     def run_preset(self, preset_id: str) -> None:
-        preset = next((p for p in self.cfg["presets"] if p["id"] == preset_id), self.cfg["presets"][0])
+        preset = self._preset(preset_id)
         cfg = copy.deepcopy(self.cfg)
         seconds = int(cfg["listen_seconds"])
         audio = self.listener.last(seconds)
@@ -104,9 +104,9 @@ class Controller(QObject):
         self.window.reveal()
         job = self._next_job()
         heard = self.window.add(HeardCard(seconds))
-        card = self.window.add(ReplyCard(self._tag(preset)))
+        convo = self.convo = []  # each clip is its own conversation
+        card = self._reply_card(preset, convo)
         self.cards = {job: (heard, card)}
-        convo = self.convo = []
 
         def work(emit, cancelled):
             if not self.transcriber.has_speech(audio):
@@ -135,14 +135,38 @@ class Controller(QObject):
         self.window.add(UserBubble(text))
         if not self.convo:  # nothing to follow up on: treat it as a claim to check
             preset = self.cfg["presets"][0]
-            card = self.window.add(ReplyCard(self._tag(preset)))
             self.convo = [{"role": "user", "content": first_message(preset, typed=text)}]
+            card = self._reply_card(preset, self.convo)
         else:
-            card = self.window.add(ReplyCard(None))
             self.convo.append({"role": "user", "content": text})
+            card = self._reply_card(None, self.convo)
         self.cards = {job: (None, card)}
         convo = self.convo
         self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
+
+    def react(self, convo: list, preset_id: str) -> None:
+        """Run another mode on a clip that was already transcribed, continuing its conversation."""
+        if self.busy or not convo:
+            return
+        preset = self._preset(preset_id)
+        cfg = copy.deepcopy(self.cfg)
+        job = self._next_job()
+        self.convo = convo
+        convo.append({"role": "user", "content": reaction_message(preset)})
+        card = self._reply_card(preset, convo)
+        self.cards = {job: (None, card)}
+        self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
+
+    def _preset(self, preset_id: str) -> dict:
+        if preset_id == config.DIG_DEEPER["id"]:
+            return config.DIG_DEEPER
+        return next((p for p in self.cfg["presets"] if p["id"] == preset_id), self.cfg["presets"][0])
+
+    def _reply_card(self, preset: dict | None, convo: list) -> ReplyCard:
+        card = self.window.add(ReplyCard(self._tag(preset) if preset else None))
+        card.mode_id = preset["id"] if preset else None
+        card.reacted.connect(lambda preset_id: self.react(convo, preset_id))
+        return card
 
     def clear(self) -> None:
         self._next_job()
@@ -266,6 +290,10 @@ class Controller(QObject):
             self.window.toggle()
 
     def _next_job(self) -> int:
+        for _heard, card in self.cards.values():
+            if card.running:  # its answer will never arrive now
+                card.cancel()
+        self.cards = {}
         self.job += 1
         return self.job
 
@@ -318,6 +346,9 @@ class Controller(QObject):
                 heard.set_text("(nothing transcribed)")
         elif kind == "done":
             card.finish()
+            if not card.failed:
+                options = [(p["id"], p["name"]) for p in self.cfg["presets"] if p["id"] != card.mode_id]
+                card.show_reactions(options + [(config.DIG_DEEPER["id"], config.DIG_DEEPER["name"])])
             self._set_busy(False)
 
     def _preload_speech_model(self) -> None:
