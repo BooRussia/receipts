@@ -1,0 +1,6 @@
+anthropic>=1.13
+PySide6-Essentials>=6.7
+soundcard>=0.4.4
+numpy>=1.26
+faster-whisper>=1.1
+pynput>=1.7.7
