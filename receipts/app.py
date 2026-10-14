@@ -104,6 +104,7 @@ class Controller(QObject):
         self.window.reveal()
         job = self._next_job()
         heard = self.window.add(HeardCard(seconds))
+        heard.picked.connect(lambda kind, index, preset_id: self.check_target(heard, kind, index, preset_id))
         convo = self.convo = []  # each clip is its own conversation
         card = self._reply_card(preset, convo)
         self.cards = {job: (heard, card)}
@@ -116,13 +117,14 @@ class Controller(QObject):
                 emit("status", "Loading the speech model (the first run downloads it)")
             else:
                 emit("status", "Transcribing")
-            text = self.transcriber.transcribe(audio, cfg)
+            transcript = self.transcriber.transcribe(audio, cfg)
             if cancelled():
                 return
-            if not text:
+            if not transcript.text:
                 raise UserFacing("Heard sound but couldn't make out any words. Type the claim below instead.")
-            emit("transcript", text)
-            convo.append({"role": "user", "content": first_message(preset, transcript=text, seconds=seconds)})
+            emit("transcript", transcript)
+            convo.append({"role": "user",
+                          "content": first_message(preset, transcript=transcript.for_ai(), seconds=seconds)})
             stream_reply(cfg, convo, emit, cancelled)
 
         self._start(job, work, cfg)
@@ -157,13 +159,37 @@ class Controller(QObject):
         self.cards = {job: (None, card)}
         self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
 
+    def check_target(self, heard: HeardCard, kind: str, index: int, preset_id: str) -> None:
+        """Check one tapped line, or one speaker, from a clip. Starts a fresh conversation."""
+        transcript = heard.transcript
+        if transcript is None:
+            return
+        preset = self._preset(preset_id)
+        if kind == "speaker":
+            focus = f"Focus only on what S{index} said; treat everyone else as context."
+            target, label = f"only what S{index} said", f"S{index}"
+        else:
+            line = transcript.lines[index]
+            who = f" (said by S{line.speaker})" if line.speaker else ""
+            focus = f'Focus only on this line{who}: "{line.text}"'
+            target, label = f"“{line.text}”", f"S{line.speaker}" if line.speaker else "one line"
+        cfg = copy.deepcopy(self.cfg)
+        job = self._next_job()  # tapping interrupts whatever was running
+        self.window.add(UserBubble(f"{preset['name']} → {target}"))
+        self.convo = [{"role": "user", "content": first_message(
+            preset, transcript=transcript.for_ai(), seconds=heard.seconds, focus=focus)}]
+        convo = self.convo
+        card = self._reply_card(preset, convo, label)
+        self.cards = {job: (None, card)}
+        self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
+
     def _preset(self, preset_id: str) -> dict:
         if preset_id == config.DIG_DEEPER["id"]:
             return config.DIG_DEEPER
         return next((p for p in self.cfg["presets"] if p["id"] == preset_id), self.cfg["presets"][0])
 
-    def _reply_card(self, preset: dict | None, convo: list) -> ReplyCard:
-        card = self.window.add(ReplyCard(self._tag(preset) if preset else None))
+    def _reply_card(self, preset: dict | None, convo: list, target: str = "") -> ReplyCard:
+        card = self.window.add(ReplyCard(self._tag(preset, target) if preset else None))
         card.mode_id = preset["id"] if preset else None
         card.reacted.connect(lambda preset_id: self.react(convo, preset_id))
         return card
@@ -327,7 +353,7 @@ class Controller(QObject):
             return  # a newer request replaced this one
         heard, card = self.cards[job]
         if kind == "transcript" and heard:
-            heard.set_text(payload)
+            heard.set_transcript(payload, self.cfg["presets"])
         elif kind == "status":
             card.set_status(payload)
         elif kind == "search":
@@ -390,8 +416,9 @@ class Controller(QObject):
         self.cfg["window"] = {"x": g.x(), "y": g.y(), "w": g.width(), "h": g.height()}
         config.save(self.cfg)
 
-    def _tag(self, preset: dict) -> str:
-        return f"{preset['name']} · {self.cfg.get('ai_provider', 'claude').title()}"
+    def _tag(self, preset: dict, target: str = "") -> str:
+        parts = [preset["name"], target, self.cfg.get("ai_provider", "claude").title()]
+        return " · ".join(p for p in parts if p)
 
     def _welcome(self, after_update: bool) -> None:
         if after_update:

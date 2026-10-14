@@ -14,6 +14,11 @@ fix obvious mis-hearings, ignore filler and game chatter, and find the claim act
 argued, usually the most recent confident factual assertion. If there are two separate claims, \
 handle the main one and mention the other in one line.
 
+Sometimes lines are labeled S1, S2, … by automatic speaker detection. Labels only apply within \
+one clip and can be wrong. When they're there, work out who is pushing the claim being argued \
+and name them briefly (for example "S2 claims…"). When the user asks you to focus on one line \
+or one speaker, check only that and treat the rest as context.
+
 How to work:
 - Search the web before giving a verdict on anything checkable. Prefer authoritative sources \
 (official statistics, encyclopedias, reputable news outlets, expert bodies).
@@ -36,11 +41,14 @@ PROVIDERS = {"claude": "Claude (Anthropic)", "grok": "Grok (xAI)"}
 Emit = Callable[[str, object], None]
 
 
-def first_message(preset: dict, *, transcript: str | None = None, seconds: int = 0, typed: str = "") -> str:
+def first_message(preset: dict, *, transcript: str | None = None, seconds: int = 0, typed: str = "",
+                  focus: str = "") -> str:
     if transcript is not None:
         body = f'<transcript seconds="{seconds}">\n{transcript}\n</transcript>'
     else:
         body = f"The user typed the claim themselves:\n<claim>\n{typed}\n</claim>"
+    if focus:
+        body += f"\n\n{focus}"
     return f"Mode: {preset['name']}\n{preset['prompt']}\n\n{body}"
 
 

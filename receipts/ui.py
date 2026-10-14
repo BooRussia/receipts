@@ -8,12 +8,12 @@ from urllib.parse import urlparse
 
 from PySide6.QtCore import QPointF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
+    QColor, QCursor, QDesktopServices, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
     QTextDocument,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizeGrip, QSpinBox, QVBoxLayout, QWidget,
+    QLineEdit, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizeGrip, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from . import config
@@ -41,7 +41,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none
 #heard {{ background: #191b22; border: 1px solid #252834; border-radius: 10px; }}
 #tag {{ color: #8b8fa3; font-size: 10px; font-weight: 700; }}
 #modeTag {{ color: {ACCENT}; font-size: 10px; font-weight: 700; }}
-#heardText {{ color: #a3a7b9; font-style: italic; font-size: 12px; }}
+#heardText {{ color: #a3a7b9; font-size: 12px; }}
 #reply {{ background: #1d2029; border: 1px solid #30343f; border-radius: 12px; }}
 #status {{ color: #8b8fa3; font-size: 12px; }}
 #body {{ color: #eceef3; font-size: 13px; }}
@@ -149,18 +149,64 @@ def _label(text: str = "", name: str = "body", fmt=Qt.MarkdownText) -> QLabel:
 # --- feed items --------------------------------------------------------------------------
 
 
+SPEAKER_COLORS = ["#7cc4ff", "#ff9b7a", "#b69cff", "#7ee0a8", "#ff8fc7", "#e6d36f"]
+
+
 class HeardCard(QFrame):
-    """What the app heard: the transcript of the last N seconds."""
+    """What the app heard. Each line (and each speaker label) can be tapped to check just that."""
+
+    picked = Signal(str, int, str)  # "line" + line index, or "speaker" + speaker number; then a preset id
 
     def __init__(self, seconds: int):
         super().__init__(objectName="heard")
+        self.seconds = seconds
+        self.transcript = None
+        self._presets: list[dict] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 9, 12, 10)
         lay.setSpacing(4)
         stamp = time.strftime("%I:%M %p").lstrip("0")
         lay.addWidget(_label(f"🎧  HEARD · LAST {seconds}s · {stamp}", "tag", Qt.PlainText))
         self.text = _label("Transcribing…", "heardText", Qt.PlainText)
+        self.text.setOpenExternalLinks(False)
+        self.text.linkActivated.connect(self._on_link)
         lay.addWidget(self.text)
+        self.hint = _label("", "hint", Qt.PlainText)
+        self.hint.hide()
+        lay.addWidget(self.hint)
+
+    def set_transcript(self, transcript, presets: list[dict]) -> None:
+        self.transcript, self._presets = transcript, presets
+        turns: list[list] = []  # [speaker, [line links]]
+        for i, line in enumerate(transcript.lines):
+            link = f'<a href="line:{i}" style="color:#c9ccd9; text-decoration:none">{html.escape(line.text)}</a>'
+            if turns and turns[-1][0] == line.speaker:
+                turns[-1][1].append(link)
+            else:
+                turns.append([line.speaker, [link]])
+        rows = []
+        for speaker, links in turns:
+            chip = ""
+            if speaker is not None:
+                color = SPEAKER_COLORS[(speaker - 1) % len(SPEAKER_COLORS)]
+                chip = (f'<a href="speaker:{speaker}" style="color:{color}; text-decoration:none">'
+                        f"<b>S{speaker}</b></a>&nbsp;&nbsp;")
+            rows.append(f'<p style="margin-top:0; margin-bottom:5px">{chip}{" ".join(links)}</p>')
+        self.text.setTextFormat(Qt.RichText)
+        self.text.setText("".join(rows))
+        self.hint.setText("TAP A LINE" + (" OR A SPEAKER" if transcript.speakers else "") + " TO CHECK JUST THAT")
+        self.hint.show()
+
+    def _on_link(self, href: str) -> None:
+        kind, _, value = href.partition(":")
+        if not value.isdigit() or not self._presets:
+            return
+        menu = QMenu(self)
+        title = menu.addAction(f"Only what S{value} said" if kind == "speaker" else "Just this line")
+        title.setEnabled(False)
+        for p in self._presets:
+            menu.addAction(p["name"], lambda pid=p["id"]: self.picked.emit(kind, int(value), pid))
+        menu.exec(QCursor.pos())
 
     def set_text(self, text: str) -> None:
         self.text.setToolTip(text if len(text) > 420 else "")
@@ -540,8 +586,9 @@ class SettingsDialog(QDialog):
         stt = QGroupBox("Speech to text")
         self.sf = QFormLayout(stt)
         self.provider = QComboBox()
-        for key, label in [("local", "On this PC (free, private)"), ("openai", "OpenAI API"),
-                           ("groq", "Groq API (very fast, has a free tier)")]:
+        for key, label in [("local", "On this PC (free, private)"),
+                           ("xai", "xAI API (labels who's talking)"),
+                           ("openai", "OpenAI API"), ("groq", "Groq API (very fast, has a free tier)")]:
             self.provider.addItem(label, key)
         self.provider.setCurrentIndex(max(0, self.provider.findData(cfg["stt_provider"])))
         self.sf.addRow("Transcribe with", self.provider)
@@ -558,6 +605,10 @@ class SettingsDialog(QDialog):
         self.sf.addRow("OpenAI API key", self.openai_key)
         self.groq_key = self._secret(cfg["groq_api_key"])
         self.sf.addRow("Groq API key", self.groq_key)
+        self.xai_stt_note = QLabel("Uses the xAI API key from the AI section. Shows S1, S2, … for each voice.")
+        self.xai_stt_note.setWordWrap(True)
+        self.xai_stt_note.setStyleSheet("color:#8b8fa3; font-size:11px;")
+        self.sf.addRow(self.xai_stt_note)
         self.provider.currentIndexChanged.connect(self._sync_stt_rows)
         self._sync_stt_rows()
         lay.addWidget(stt)
@@ -588,6 +639,7 @@ class SettingsDialog(QDialog):
         self.grok_model.setCurrentText(cfg["grok_model"])
         cf.addRow("Grok model", self.grok_model)
         self.ai_provider.currentIndexChanged.connect(self._sync_ai_rows)
+        self.provider.currentIndexChanged.connect(self._sync_ai_rows)
         self._sync_ai_rows()
         lay.insertWidget(0, ai)
 
@@ -668,8 +720,9 @@ class SettingsDialog(QDialog):
         grok = self.ai_provider.currentData() == "grok"
         for w in (self.anthropic_key, self.model, self.effort):
             self.af.setRowVisible(w, not grok)
-        for w in (self.xai_key, self.grok_model):
-            self.af.setRowVisible(w, grok)
+        self.af.setRowVisible(self.grok_model, grok)
+        # The xAI key also powers xAI speech-to-text, so show it for either.
+        self.af.setRowVisible(self.xai_key, grok or self.provider.currentData() == "xai")
 
     def _sync_stt_rows(self) -> None:
         provider = self.provider.currentData()
@@ -677,6 +730,7 @@ class SettingsDialog(QDialog):
         self.sf.setRowVisible(self.local_device, provider == "local")
         self.sf.setRowVisible(self.openai_key, provider == "openai")
         self.sf.setRowVisible(self.groq_key, provider == "groq")
+        self.sf.setRowVisible(self.xai_stt_note, provider == "xai")
 
     def _save(self) -> None:
         combos = [e.text().strip().lower() for e in self.hotkey_edits] + [self.toggle_edit.text().strip().lower()]

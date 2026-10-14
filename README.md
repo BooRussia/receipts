@@ -41,6 +41,13 @@ To start it with Windows, press `Win+R`, type `shell:startup`, and drop a shortc
   it remembers the earlier answers.
 - The **NEW CLIP** buttons at the bottom (like the hotkeys) grab the latest audio, for the next round of
   the argument.
+- **Tap any line** in the transcript to fact-check, argue or roast just that line. Handy when several people
+  are talking.
+
+**Who said what:** set ⚙ Settings → Speech to text to **xAI API** (it uses your xAI key) and each voice gets
+a label: S1, S2, S3. Tap a label to check only what that person said. The AI also uses the labels to work
+out who is pushing the claim. Labels only apply within one clip (S1 in one clip isn't necessarily S1 in the
+next), and people talking over each other can still get mixed up.
 
 - The popup doesn't steal focus from your game or Discord. Click into it if you want to type.
 - Type in the box to follow up ("source for the second point?", "what about X?"), or type a claim yourself.
@@ -91,5 +98,6 @@ Haiku, grok-4.3) cost less. Local transcription is free.
 ## Privacy
 
 Audio only lives in memory (a rolling ~3-minute buffer) and is never saved to disk. Nothing leaves your PC
-until you press a hotkey. Then the clip is transcribed (locally by default) and only the transcript text goes
-to the AI you picked. It's still polite to let the group know you've got a fact-checker running.
+until you press a hotkey. Then the clip is transcribed and the transcript text goes to the AI you picked.
+With local transcription (the default) the audio itself never leaves your PC; with a cloud option (xAI,
+OpenAI, Groq) that one clip is sent to that service to be transcribed. It's still polite to let the group know you've got a fact-checker running.

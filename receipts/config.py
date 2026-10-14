@@ -82,13 +82,14 @@ DEFAULTS = {
     # "" = auto: use the SteelSeries Sonar "Chat" output if it exists, else the default output.
     "audio_source": "",
     "listen_seconds": 45,
-    "stt_provider": "local",  # local | openai | groq
+    "stt_provider": "local",  # local | openai | groq | xai (xai also labels who's talking)
     "local_model": "small.en",
     "local_device": "cpu",  # cpu | cuda (NVIDIA GPU + CUDA 12 libraries)
     "openai_api_key": "",
     "openai_stt_model": "gpt-4o-mini-transcribe",
     "groq_api_key": "",
     "groq_stt_model": "whisper-large-v3-turbo",
+    "xai_stt_model": "grok-voice-transcribe-2.0",  # uses xai_api_key
     "ai_provider": "claude",  # claude | grok
     "anthropic_api_key": "",
     "claude_model": "claude-opus-5-5",
