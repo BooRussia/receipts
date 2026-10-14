@@ -31,8 +31,10 @@ STYLE = f"""
 QPushButton#icon {{ background: transparent; color: #8b8fa3; border: none; font-size: 15px;
     padding: 3px 7px; border-radius: 6px; }}
 QPushButton#icon:hover {{ background: #23252f; color: #e8e9ee; }}
-QPushButton#update {{ background: {ACCENT}; color: {BG}; border: none; border-radius: 9px; font-size: 11px;
-    font-weight: 700; padding: 3px 9px; }}
+QPushButton#update {{ background: #3b82f6; color: white; border: none; border-radius: 9px; font-size: 11px;
+    font-weight: 700; padding: 3px 10px; }}
+QPushButton#update:hover {{ background: #2563eb; }}
+QPushButton#update:disabled {{ background: #1e3a6b; color: #b9c8e8; }}
 QScrollArea, #feed {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: #2f3240; border-radius: 3px; min-height: 30px; }}
@@ -472,9 +474,16 @@ class ChatWindow(QWidget):
         self.hide() if self.isVisible() else self.reveal(activate=True)
 
     def show_update(self, version: str | None, notes: str = "") -> None:
+        self.update_btn.setText("⬆ Update")
+        self.update_btn.setEnabled(True)
         self.update_btn.setVisible(bool(version))
         if version:
-            self.update_btn.setToolTip(f"Version {version} is available. {notes}".strip())
+            self.update_btn.setToolTip(f"Version {version} is ready. Click to update and reopen.\n\n{notes}".strip())
+
+    def set_updating(self) -> None:
+        self.update_btn.setText("Updating…")
+        self.update_btn.setEnabled(False)
+        self.update_btn.show()
 
     def set_busy(self, busy: bool) -> None:
         self.send.setEnabled(not busy)
@@ -665,7 +674,7 @@ class SettingsDialog(QDialog):
         up = QGroupBox("Updates")
         ul = QHBoxLayout(up)
         ul.addWidget(QLabel(f"Version {version}"))
-        self.auto_update = QCheckBox("Check when Receipts starts")
+        self.auto_update = QCheckBox("Check automatically (every 15 minutes)")
         self.auto_update.setChecked(bool(cfg.get("check_updates", True)))
         ul.addWidget(self.auto_update, 1)
         check = QPushButton("Check for updates")

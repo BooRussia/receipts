@@ -59,9 +59,9 @@ That gives you a physical "FACT CHECK" button.
 
 ## Updates
 
-Receipts checks GitHub for a new version when it starts. When one is out, a gold **⬆ Update** button appears
-at the top of the window. Click it and Receipts downloads the new version, swaps it in, and restarts. Your
-settings, keys and prompts are kept. You can also check by hand: tray icon → **Check for updates**, or
+Receipts checks GitHub for a new version when it starts and every 15 minutes after that. When one is out, a
+blue **⬆ Update** button appears at the top of the window. One click downloads the new version, swaps it in,
+and reopens Receipts. Your settings, keys and prompts are kept. You can also check by hand: tray icon → **Check for updates**, or
 ⚙ Settings → **Check for updates**. If an update needs new packages, a console window shows them installing
 during the restart.
 

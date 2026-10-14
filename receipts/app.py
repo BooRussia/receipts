@@ -16,6 +16,8 @@ from .ui import ChatWindow, HeardCard, ReplyCard, SettingsDialog, UserBubble, ma
 
 log = logging.getLogger(__name__)
 
+UPDATE_CHECK_MINUTES = 15
+
 
 class UserFacing(Exception):
     """An error whose message is fine to show as-is."""
@@ -31,6 +33,7 @@ class Controller(QObject):
         super().__init__()
         self.app = app
         self.pending_release = None
+        self.installing = False
         self.cfg = config.load()
         if not config.CONFIG_PATH.exists():
             config.save(self.cfg)  # so "Edit prompts…" has a file to open
@@ -89,8 +92,12 @@ class Controller(QObject):
             self._apply_hotkeys()
         self._welcome(after_update)
         self.window.reveal()
+        # Look for updates shortly after starting, then every few minutes in the background.
+        self._update_timer = QTimer(self, interval=UPDATE_CHECK_MINUTES * 60 * 1000,
+                                    timeout=lambda: self.check_updates(manual=False))
         if self.cfg.get("check_updates", True):
             QTimer.singleShot(4000, lambda: self.check_updates(manual=False))
+            self._update_timer.start()
 
     # --- actions -------------------------------------------------------------------------
 
@@ -212,6 +219,10 @@ class Controller(QObject):
         config.save(self.cfg)
         self.listener.set_source(self.cfg["audio_source"])
         self.window.set_presets(self.cfg["presets"])
+        if self.cfg.get("check_updates", True):
+            self._update_timer.start()
+        else:
+            self._update_timer.stop()
         if (old["local_model"], old["local_device"], old["stt_provider"]) != (
                 self.cfg["local_model"], self.cfg["local_device"], self.cfg["stt_provider"]):
             self._preload_speech_model()
@@ -232,16 +243,17 @@ class Controller(QObject):
         threading.Thread(target=run, name="update-check", daemon=True).start()
 
     def install_update(self) -> None:
-        release = self.pending_release
-        if not release:
+        """The blue Update button: one click downloads, swaps in and relaunches."""
+        if self.installing:
+            return
+        if not self.pending_release:
             self.check_updates(manual=True)
             return
-        answer = QMessageBox.question(self._dialog_parent(), "Update Receipts",
-                                      f"Update to version {release.version} and restart?\n\n{release.notes}")
-        if answer == QMessageBox.Yes:
-            self._start_install(release)
+        self._start_install(self.pending_release)
 
     def _on_update_checked(self, release, error: str, manual: bool) -> None:
+        if self.installing:
+            return
         self.pending_release = release
         self.window.show_update(release.version if release else None, release.notes if release else "")
         if not manual:
@@ -262,8 +274,10 @@ class Controller(QObject):
         if reason := updater.blocked_reason():
             QMessageBox.information(self._dialog_parent(), "Updates", reason)
             return
+        self.installing = True
+        self.window.set_updating()
         self.window.reveal()
-        self.window.add_info(f"⬇ Downloading version {release.version}…")
+        self.window.add_info(f"⬇ Updating to version {release.version}. Receipts will reopen by itself.")
 
         def run():
             try:
@@ -277,7 +291,10 @@ class Controller(QObject):
 
     def _on_update_installed(self, error: str) -> None:
         if error:
+            self.installing = False
             self.window.add_info(f"⚠️ Update failed: {error}")
+            release = self.pending_release
+            self.window.show_update(release.version if release else None, release.notes if release else "")
             return
         self.window.add_info("Restarting…")
         updater.relaunch()

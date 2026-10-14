@@ -1,4 +1,4 @@
 {
-  "version": "1.3.0",
-  "notes": "Tap any line in the transcript to check just that line. For who-said-what labels (S1, S2, …), set Settings → Speech to text → xAI API; then tap a label to check only that person."
+  "version": "1.4.0",
+  "notes": "Updates now check every 15 minutes: a blue Update button appears at the top when one is ready, and one click updates and reopens. Also new: tap any transcript line to check just that, and who-said-what labels (S1, S2, …) via Settings → Speech to text → xAI API."
 }
