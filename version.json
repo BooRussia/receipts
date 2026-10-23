@@ -1,4 +1,4 @@
 {
-  "version": "1.4.0",
-  "notes": "Updates now check every 15 minutes: a blue Update button appears at the top when one is ready, and one click updates and reopens. Also new: tap any transcript line to check just that, and who-said-what labels (S1, S2, …) via Settings → Speech to text → xAI API."
+  "version": "1.4.1",
+  "notes": "Small fix: the AI no longer gets told transcripts have no speaker labels, so it uses the S1/S2 labels properly."
 }
