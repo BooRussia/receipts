@@ -46,19 +46,26 @@ def list_sources() -> list[tuple[str, str]]:
     return out
 
 
-def _resolve(key: str):
+def _resolve(key: str, auto: str = "chat"):
     devices = _all_devices()
     if key:
         for dev in devices:
             if _key(dev) == key:
                 return dev
         raise RuntimeError(f"Audio source not found: {key.split(':', 1)[-1]}")
-    # Auto: Sonar's Chat channel if present, otherwise whatever is playing on the default output.
+    sc = _soundcard()
+    if auto == "mic":
+        # Auto mic: Sonar's virtual microphone (what Discord hears from you), else the default mic.
+        for dev in devices:
+            name = dev.name.lower()
+            if not getattr(dev, "isloopback", False) and "sonar" in name and "microphone" in name:
+                return dev
+        return sc.default_microphone()
+    # Auto chat: Sonar's Chat channel if present, otherwise whatever is playing on the default output.
     for dev in devices:
         name = dev.name.lower()
         if getattr(dev, "isloopback", False) and "sonar" in name and "chat" in name:
             return dev
-    sc = _soundcard()
     if IS_WINDOWS:
         default_out = sc.default_speaker().name
         for dev in devices:
@@ -72,11 +79,13 @@ class _Ring:
         self.buf = np.zeros(size, dtype=np.float32)
         self.pos = 0
         self.filled = 0
+        self.total = 0  # samples ever written; never resets, so readers can keep a cursor
         self.lock = threading.Lock()
 
     def write(self, x: np.ndarray) -> None:
         n, size = len(x), len(self.buf)
         with self.lock:
+            self.total += n
             if n >= size:
                 self.buf[:] = x[-size:]
                 self.pos, self.filled = 0, size
@@ -92,13 +101,21 @@ class _Ring:
             self.filled = min(size, self.filled + n)
 
     def last(self, n: int) -> np.ndarray:
-        size = len(self.buf)
         with self.lock:
-            n = min(n, self.filled)
-            start = (self.pos - n) % size
-            if start + n <= size:
-                return self.buf[start:start + n].copy()
-            return np.concatenate([self.buf[start:], self.buf[: start + n - size]])
+            return self._last(n)
+
+    def since(self, cursor: int) -> tuple[np.ndarray, int]:
+        """Everything written after `cursor` (a previous `total`), and the new cursor."""
+        with self.lock:
+            return self._last(self.total - cursor), self.total
+
+    def _last(self, n: int) -> np.ndarray:
+        size = len(self.buf)
+        n = max(0, min(n, self.filled))
+        start = (self.pos - n) % size
+        if start + n <= size:
+            return self.buf[start:start + n].copy()
+        return np.concatenate([self.buf[start:], self.buf[: start + n - size]])
 
     def clear(self) -> None:
         with self.lock:
@@ -106,9 +123,13 @@ class _Ring:
 
 
 class AudioListener:
-    """Records the chosen source on a background thread, forever."""
+    """Records the chosen source on a background thread until stopped.
 
-    def __init__(self):
+    `auto` picks the device when no source is chosen: "chat" (voice-chat output) or "mic" (your mic).
+    """
+
+    def __init__(self, auto: str = "chat"):
+        self._auto = auto
         self._ring = _Ring(BUFFER_SECONDS * SAMPLE_RATE)
         self._key = ""
         self._switch = threading.Event()
@@ -134,6 +155,12 @@ class AudioListener:
     def last(self, seconds: float) -> np.ndarray:
         return self._ring.last(int(seconds * SAMPLE_RATE))
 
+    def position(self) -> int:
+        return self._ring.total
+
+    def read_since(self, cursor: int) -> tuple[np.ndarray, int]:
+        return self._ring.since(cursor)
+
     def _run(self) -> None:
         if IS_WINDOWS:
             # WASAPI is COM; this thread needs its own COM apartment.
@@ -144,7 +171,7 @@ class AudioListener:
         while not self._stop.is_set():
             self._switch.clear()
             try:
-                dev = _resolve(self._key)
+                dev = _resolve(self._key, self._auto)
                 self.source_name, self.error = dev.name, ""
                 self._ring.clear()
                 log.info("Listening to %r", dev)

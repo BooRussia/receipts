@@ -1,4 +1,4 @@
 {
-  "version": "1.4.1",
-  "notes": "Small fix: the AI no longer gets told transcripts have no speaker labels, so it uses the S1/S2 labels properly."
+  "version": "1.5.0",
+  "notes": "Live recording: press ⏺ Record at the top (or Ctrl+Alt+L) to keep transcribing you and them until you stop. Press Fact-check any time to pick recent statements, then Argue for (your points) or Argue against (theirs). Save the transcript when you stop."
 }

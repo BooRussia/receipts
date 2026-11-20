@@ -105,11 +105,12 @@ class Transcriber:
         frames = audio[: len(audio) // win * win].reshape(-1, win)
         return float(np.sqrt(np.mean(np.square(frames), axis=1)).max()) > SILENCE_RMS
 
-    def transcribe(self, audio: np.ndarray, cfg: dict) -> Transcript:
+    def transcribe(self, audio: np.ndarray, cfg: dict, diarize: bool = True) -> Transcript:
+        """diarize: ask providers that can (xAI) to label each speaker."""
         provider = cfg.get("stt_provider", "local")
         if provider == "local":
             return self._local(audio, cfg)
-        return self._cloud(audio, cfg, provider)
+        return self._cloud(audio, cfg, provider, diarize)
 
     # --- local ---------------------------------------------------------------
 
@@ -148,14 +149,14 @@ class Transcriber:
 
     # --- cloud ---------------------------------------------------------------
 
-    def _cloud(self, audio: np.ndarray, cfg: dict, provider: str) -> Transcript:
+    def _cloud(self, audio: np.ndarray, cfg: dict, provider: str, diarize: bool) -> Transcript:
         name = PROVIDER_NAMES[provider]
         key = cfg.get(f"{provider}_api_key", "")
         if not key:
             raise RuntimeError(f"Add your {name} API key in ⚙ Settings (or switch transcription to Local).")
         fields = {"model": cfg[f"{provider}_stt_model"]}
         if provider == "xai":
-            fields.update(language="en", format="true", diarize="true")  # diarize: label each speaker
+            fields.update(language="en", format="true", diarize="true" if diarize else "false")
         elif provider == "groq":
             fields["response_format"] = "verbose_json"  # adds per-sentence segments
         else:

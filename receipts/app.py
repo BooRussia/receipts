@@ -1,22 +1,32 @@
-"""Wires it together: hotkey → last N seconds of audio → transcript → Claude → popup."""
+"""Wires it together: hotkey → audio → transcript → Claude or Grok → popup.
+
+Two ways in: a hotkey grabs the last N seconds, or ⏺ Record keeps transcribing both sides until
+stopped and lets you pick recent statements to check.
+"""
 
 import copy
 import logging
 import threading
+import time
+from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Signal
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import config, updater
 from .audio import AudioListener, list_sources
 from .hotkeys import Hotkeys
+from .live import LiveSession, clock, format_lines
 from .llm import first_message, friendly_error, provider_key, reaction_message, stream_reply
 from .stt import Transcriber
-from .ui import ChatWindow, HeardCard, ReplyCard, SettingsDialog, UserBubble, make_icon, pretty_hotkey
+from .ui import (ActionCard, ChatWindow, HeardCard, LivePickCard, ReplyCard, SettingsDialog, UserBubble,
+                 make_icon, pretty_hotkey)
 
 log = logging.getLogger(__name__)
 
 UPDATE_CHECK_MINUTES = 15
+LIVE_CONTEXT_LINES = 30  # how much of a live recording the AI sees around the picked statements
+_RECORD = "::record"
 
 
 class UserFacing(Exception):
@@ -28,6 +38,7 @@ class Controller(QObject):
     worker_event = Signal(int, str, object)
     update_checked = Signal(object, str, bool)  # release or None, error, asked by the user
     update_installed = Signal(str)  # error, or "" on success
+    live_event = Signal(str, object)  # ("line" | "error" | "done", payload) from a live recording
 
     def __init__(self, app: QApplication, use_hotkeys: bool = True, after_update: bool = False):
         super().__init__()
@@ -44,6 +55,8 @@ class Controller(QObject):
         self.cards: dict[int, tuple] = {}
         self.convo: list | None = None  # the conversation typed follow-ups continue
         self.busy = False
+        self.live: LiveSession | None = None
+        self._mic: AudioListener | None = None
 
         self.listener = AudioListener()
         self.listener.start(self.cfg["audio_source"])
@@ -64,6 +77,9 @@ class Controller(QObject):
         self.window.clear_clicked.connect(self.clear)
         self.window.hidden.connect(self._save_geometry)
         self.window.update_clicked.connect(self.install_update)
+        self.window.record_clicked.connect(self.toggle_recording)
+        self.live_event.connect(self._on_live_event)
+        self._live_timer = QTimer(self, interval=500, timeout=self._update_live_status)
         self.update_checked.connect(self._on_update_checked)
         self.update_installed.connect(self._on_update_installed)
 
@@ -76,6 +92,7 @@ class Controller(QObject):
         menu.addAction("Show window", lambda: self.window.reveal(activate=True))
         for p in self.cfg["presets"]:
             menu.addAction(f"{p['name']} now", lambda pid=p["id"]: self.run_preset(pid))
+        menu.addAction("Start / stop recording", self.toggle_recording)
         menu.addSeparator()
         menu.addAction("Settings…", self.open_settings)
         menu.addAction("Check for updates", lambda: self.check_updates(manual=True))
@@ -102,6 +119,9 @@ class Controller(QObject):
     # --- actions -------------------------------------------------------------------------
 
     def run_preset(self, preset_id: str) -> None:
+        if self.live:
+            self.open_picker(preset_id)
+            return
         preset = self._preset(preset_id)
         cfg = copy.deepcopy(self.cfg)
         seconds = int(cfg["listen_seconds"])
@@ -153,7 +173,7 @@ class Controller(QObject):
         convo = self.convo
         self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
 
-    def react(self, convo: list, preset_id: str) -> None:
+    def react(self, convo: list, preset_id: str, own_claim: bool = False) -> None:
         """Run another mode on a clip that was already transcribed, continuing its conversation."""
         if self.busy or not convo:
             return
@@ -162,7 +182,7 @@ class Controller(QObject):
         job = self._next_job()
         self.convo = convo
         convo.append({"role": "user", "content": reaction_message(preset)})
-        card = self._reply_card(preset, convo)
+        card = self._reply_card(preset, convo, own_claim=own_claim)
         self.cards = {job: (None, card)}
         self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
 
@@ -190,15 +210,166 @@ class Controller(QObject):
         self.cards = {job: (None, card)}
         self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
 
+    # --- live recording ------------------------------------------------------------------
+
+    def toggle_recording(self) -> None:
+        if self.live:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def start_recording(self) -> None:
+        cfg = copy.deepcopy(self.cfg)
+        sources = {"them": self.listener}
+        if cfg.get("mic_source") != "none":
+            self._mic = AudioListener(auto="mic")
+            self._mic.start(cfg.get("mic_source", ""))
+            sources["you"] = self._mic
+
+        def transcribe(audio):
+            return self.transcriber.transcribe(audio, cfg, diarize=False).text
+
+        session = LiveSession(sources, transcribe,
+                              on_line=lambda line: self.live_event.emit("line", line),
+                              on_error=lambda message: self.live_event.emit("error", message),
+                              on_done=lambda: self.live_event.emit("done", session))
+        self.live = session
+        session.start()
+        self.window.set_recording(True, cfg.get("record_hotkey", ""))
+        self._update_live_status()
+        self._live_timer.start()
+        self.window.reveal()
+        fact = next((p for p in cfg["presets"] if p["id"] == "factcheck"), cfg["presets"][0])
+        key = f" (**{pretty_hotkey(fact['hotkey'])}**)" if fact.get("hotkey") else ""
+        who = "you and them" if "you" in sources else "them (your mic is off in ⚙ Settings)"
+        self.window.add_info(f"⏺ **Recording.** Transcribing {who} until you press Stop. Any time, press "
+                             f"{fact['name']}{key} to pick recent statements to check.")
+
+    def stop_recording(self) -> None:
+        live, self.live = self.live, None
+        if not live:
+            return
+        live.stop()  # statements already heard still get transcribed; "done" arrives after
+        if self._mic:  # what it already heard stays buffered for that last pass
+            self._mic.stop()
+            self._mic = None
+        self._live_timer.stop()
+        self.window.set_recording(False, self.cfg.get("record_hotkey", ""))
+        self.tray.setToolTip(config.APP_NAME)
+        self.window.add_info(f"⏹ Stopped after {clock(live.elapsed)}. Finishing the last few statements…")
+
+    def open_picker(self, preset_id: str) -> None:
+        lines = self.live.lines()
+        self.window.reveal()
+        if not lines:
+            self.window.add_info("Nothing transcribed yet. Keep talking, then try again.")
+            return
+        actions = []
+        for p in self.cfg["presets"]:
+            actions.append((p["id"], p["name"]))
+            if p["id"] == "argue":
+                actions.append((config.ARGUE_FOR["id"], config.ARGUE_FOR["name"]))
+        card = self.window.add(LivePickCard(lines, actions, primary=preset_id, clock=clock))
+        card.chosen.connect(lambda mode, picked: self.check_live(lines, picked, mode))
+
+    def check_live(self, lines: list, picked: list, preset_id: str) -> None:
+        """Check statements picked from a live recording, with the conversation before them as context."""
+        preset = self._preset(preset_id)
+        last = max(i for i, line in enumerate(lines) if any(line is p for p in picked))
+        context = lines[max(0, last + 1 - LIVE_CONTEXT_LINES): last + 1]
+        speakers = {p.who for p in picked}
+        own = speakers == {"you"}
+        focus = "Focus only on these statement(s):\n" + "\n".join(f'- {p.label}: "{p.text}"' for p in picked)
+        if own:
+            focus += "\nThese are the user's own words."
+        quoted = " / ".join(f"“{p.text}”" for p in picked)
+        cfg = copy.deepcopy(self.cfg)
+        job = self._next_job()
+        self.window.add(UserBubble(f"{preset['name']} → {quoted if len(quoted) < 220 else quoted[:217] + '…'}"))
+        seconds = max(1, int(context[-1].t - context[0].t))
+        self.convo = [{"role": "user", "content": first_message(
+            preset, transcript=format_lines(context), seconds=seconds, focus=focus)}]
+        convo = self.convo
+        target = "You" if own else "Them" if speakers == {"them"} else ""
+        card = self._reply_card(preset, convo, target, own_claim=own)
+        self.cards = {job: (None, card)}
+        self._start(job, lambda emit, cancelled: stream_reply(cfg, convo, emit, cancelled), cfg)
+
+    def _update_live_status(self) -> None:
+        live = self.live
+        if not live:
+            return
+        lines = live.lines()
+        title = f"● REC {clock(live.elapsed)} · {len(lines)} statement{'s' if len(lines) != 1 else ''}"
+        if live.pending:
+            title += f" · {live.pending} transcribing"
+        last = f"{lines[-1].label}: {lines[-1].text}" if lines else "Listening…"
+        self.window.set_live_status(title, last)
+        self.tray.setToolTip(f"{config.APP_NAME} · recording {clock(live.elapsed)}")
+
+    def _on_live_event(self, kind: str, payload) -> None:
+        if kind == "error":
+            self.window.add_info(f"⚠️ Live transcription: {payload}")
+        elif kind == "done":
+            session = payload
+            lines = session.lines()
+            if not lines:
+                self.window.add_info("⏹ Recording finished. Nothing was transcribed.")
+                return
+            self.window.add(ActionCard(
+                f"⏹ **Recording finished:** {len(lines)} statements, {clock(session.elapsed)}. "
+                "It's only kept until Receipts closes, so save it if you want it.",
+                [("Save transcript…", lambda: self._save_transcript(session)),
+                 ("Copy transcript", lambda: self._copy_transcript(session))]))
+
+    def _transcript_text(self, session: LiveSession) -> str:
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(session.started_at))
+        return f"Receipts transcript, {stamp}\n\n{format_lines(session.lines(), stamps=True)}\n"
+
+    def _save_transcript(self, session: LiveSession) -> None:
+        stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(session.started_at))
+        folder = Path.home() / "Documents"
+        path, _ = QFileDialog.getSaveFileName(self.window, "Save transcript",
+                                              str((folder if folder.exists() else Path.home())
+                                                  / f"Receipts transcript {stamp}.txt"),
+                                              "Text files (*.txt)")
+        if path:
+            Path(path).write_text(self._transcript_text(session), encoding="utf-8")
+            self.window.add_info(f"Saved to {path}")
+
+    def _copy_transcript(self, session: LiveSession) -> None:
+        QApplication.clipboard().setText(self._transcript_text(session))
+        self.window.add_info("Transcript copied.")
+
+    # --- helpers ---------------------------------------------------------------------------
+
     def _preset(self, preset_id: str) -> dict:
-        if preset_id == config.DIG_DEEPER["id"]:
-            return config.DIG_DEEPER
+        for built_in in (config.DIG_DEEPER, config.ARGUE_FOR):
+            if preset_id == built_in["id"]:
+                return built_in
         return next((p for p in self.cfg["presets"] if p["id"] == preset_id), self.cfg["presets"][0])
 
-    def _reply_card(self, preset: dict | None, convo: list, target: str = "") -> ReplyCard:
+    def _reaction_options(self, card: ReplyCard) -> list[tuple[str, str]]:
+        options = []
+        for p in self.cfg["presets"]:
+            if p["id"] == card.mode_id:
+                continue
+            options.append((p["id"], p["name"]))
+        if card.mode_id != config.ARGUE_FOR["id"]:
+            argue_for = (config.ARGUE_FOR["id"], config.ARGUE_FOR["name"])
+            ids = [o[0] for o in options]
+            if card.own_claim:  # their own words: backing them up comes first
+                options.insert(ids.index("argue") if "argue" in ids else 0, argue_for)
+            else:
+                options.insert(ids.index("argue") + 1 if "argue" in ids else len(options), argue_for)
+        return options + [(config.DIG_DEEPER["id"], config.DIG_DEEPER["name"])]
+
+    def _reply_card(self, preset: dict | None, convo: list, target: str = "",
+                    own_claim: bool = False) -> ReplyCard:
         card = self.window.add(ReplyCard(self._tag(preset, target) if preset else None))
         card.mode_id = preset["id"] if preset else None
-        card.reacted.connect(lambda preset_id: self.react(convo, preset_id))
+        card.own_claim = own_claim
+        card.reacted.connect(lambda preset_id: self.react(convo, preset_id, card.own_claim))
         return card
 
     def clear(self) -> None:
@@ -304,6 +475,10 @@ class Controller(QObject):
         return QApplication.activeModalWidget() or self.window
 
     def quit(self) -> None:
+        if self.live:
+            self.live.stop()
+        if self._mic:
+            self._mic.stop()
         self._save_geometry()
         self.hotkeys.stop()
         self.listener.stop()
@@ -317,6 +492,8 @@ class Controller(QObject):
                     for p in self.cfg["presets"] if p.get("hotkey")}
         if self.cfg.get("toggle_hotkey"):
             bindings[self.cfg["toggle_hotkey"]] = lambda: self.hotkey_fired.emit("")
+        if self.cfg.get("record_hotkey"):
+            bindings[self.cfg["record_hotkey"]] = lambda: self.hotkey_fired.emit(_RECORD)
         try:
             bad = self.hotkeys.set(bindings)
         except Exception as e:
@@ -327,7 +504,9 @@ class Controller(QObject):
             self.window.add_info("⚠️ Ignored invalid hotkeys: " + ", ".join(bad))
 
     def _on_hotkey(self, preset_id: str) -> None:
-        if preset_id:
+        if preset_id == _RECORD:
+            self.toggle_recording()
+        elif preset_id:
             self.run_preset(preset_id)
         else:
             self.window.toggle()
@@ -390,8 +569,7 @@ class Controller(QObject):
         elif kind == "done":
             card.finish()
             if not card.failed:
-                options = [(p["id"], p["name"]) for p in self.cfg["presets"] if p["id"] != card.mode_id]
-                card.show_reactions(options + [(config.DIG_DEEPER["id"], config.DIG_DEEPER["name"])])
+                card.show_reactions(self._reaction_options(card))
             self._set_busy(False)
 
     def _preload_speech_model(self) -> None:
@@ -447,6 +625,8 @@ class Controller(QObject):
         for p in self.cfg["presets"]:
             if p.get("hotkey"):
                 lines.append(f"- **{pretty_hotkey(p['hotkey'])}**  {p['name']}")
+        if self.cfg.get("record_hotkey"):
+            lines.append(f"- **{pretty_hotkey(self.cfg['record_hotkey'])}**  ⏺ start / stop a live recording")
         if self.cfg.get("toggle_hotkey"):
             lines.append(f"- **{pretty_hotkey(self.cfg['toggle_hotkey'])}**  show / hide this window")
         if not provider_key(self.cfg):

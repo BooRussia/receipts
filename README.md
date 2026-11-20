@@ -32,12 +32,13 @@ To start it with Windows, press `Win+R`, type `shell:startup`, and drop a shortc
 | Hotkey | What it does |
 |---|---|
 | **Ctrl+Alt+F** | Fact-check: claim, ✅/❌/⚠️ verdict, key facts, a "Say this:" line |
-| **Ctrl+Alt+D** | Argue back: quick bullet points to make the case in your own words |
+| **Ctrl+Alt+D** | Argue against: quick bullet points to push back in your own words |
 | **Ctrl+Alt+R** | Roast: the verdict delivered as a (friendly) roast |
+| **Ctrl+Alt+L** | Start / stop a live recording (see below) |
 | **Ctrl+Alt+W** | Show / hide the window |
 
 - Under every answer, the **SAME CLIP** buttons run another mode on what was already heard: fact-check
-  something you argued back on, roast it, or **Dig deeper** for more specifics. No new audio is grabbed, and
+  it, **Argue against** or **Argue for** it, roast it, or **Dig deeper** for more specifics. No new audio is grabbed, and
   it remembers the earlier answers.
 - The **NEW CLIP** buttons at the bottom (like the hotkeys) grab the latest audio, for the next round of
   the argument.
@@ -53,6 +54,23 @@ next), and people talking over each other can still get mixed up.
 - Type in the box to follow up ("source for the second point?", "what about X?"), or type a claim yourself.
 - **Esc** or ✕ hides the window. Quit from the tray icon (the little gold receipt).
 - Drag the window by its header. Resize it from the bottom-right corner. It remembers where you put it.
+
+### Live recording
+
+For a long argument, press **⏺ Record** at the top of the window (or **Ctrl+Alt+L**). Receipts keeps
+transcribing until you press **Stop**, and it records both sides: your mic shows up as **You**, Discord as
+**Them**. A red bar at the top shows how long it's been running and the latest statement.
+
+While it's recording, the Fact-check hotkey (and the buttons at the bottom) opens **Pick what to check**: the
+last few statements, newest at the bottom and already selected. Tap to choose one or more (↑ Show earlier for
+older ones), then press **Fact-check**, **Argue against**, **Argue for** or **Roast**. Use **Argue for** on your
+own points and **Argue against** on theirs. After any answer, the buttons underneath switch sides or dig
+deeper.
+
+When you stop, you can **Save transcript…** (a text file with timestamps) or **Copy transcript**. Otherwise
+it's gone when Receipts closes. Your mic is set in ⚙ Settings → **Your mic** (it picks the SteelSeries Sonar
+microphone by itself, and you can turn it off). Transcribing a whole conversation on your PC uses some CPU;
+if your games stutter, switch ⚙ Settings → Speech to text to xAI or Groq.
 
 **Stream Deck:** add a *System → Hotkey* action and set it to the same keys (for example Ctrl+Alt+F).
 That gives you a physical "FACT CHECK" button.
@@ -98,6 +116,7 @@ Haiku, grok-4.3) cost less. Local transcription is free.
 ## Privacy
 
 Audio only lives in memory (a rolling ~3-minute buffer) and is never saved to disk. Nothing leaves your PC
-until you press a hotkey. Then the clip is transcribed and the transcript text goes to the AI you picked.
+until you press a hotkey or start a recording. Your own mic is only recorded while ⏺ Record is on, and a live
+transcript stays in memory unless you save it. Then the clip is transcribed and the transcript text goes to the AI you picked.
 With local transcription (the default) the audio itself never leaves your PC; with a cloud option (xAI,
 OpenAI, Groq) that one clip is sent to that service to be transcribed. It's still polite to let the group know you've got a fact-checker running.

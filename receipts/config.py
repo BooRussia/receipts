@@ -36,7 +36,7 @@ DEFAULT_PRESETS = [
     },
     {
         "id": "argue",
-        "name": "Argue back",
+        "name": "Argue against",
         "hotkey": "<ctrl>+<alt>+d",
         "prompt": (
             "Give the user ammo to argue back in their own words: quick bullet points to glance at "
@@ -74,6 +74,22 @@ DIG_DEEPER = {
     ),
 }
 
+# The other side of "Argue against": back a statement up, usually one the user made themselves.
+ARGUE_FOR = {
+    "id": "argue_for",
+    "name": "Argue for",
+    "prompt": (
+        "Give the user ammo to argue FOR this statement in their own words (it's often their own "
+        "point): quick bullet points to glance at mid-argument, not a script. Format:\n"
+        "**<the position, stated strongly, in under 8 words>**\n"
+        "- <short point, max ~12 words, with a specific name, number or example>\n"
+        "  - <supporting example, if useful>\n"
+        "3-5 points total. Every fact must be real and backed by your searches. No intro, no "
+        "advice on how to argue, no closing line. If the statement is actually wrong, start with "
+        "**⚠️ This one's shaky** and give the strongest honest version of it that does hold up."
+    ),
+}
+
 # Fingerprints of default prompts from older versions. A saved preset still using one of these was
 # never customized, so it gets upgraded to the current default; edited prompts are left alone.
 _OLD_DEFAULT_PROMPTS = {"argue": {"d6b56e0cfead"}}
@@ -81,6 +97,9 @@ _OLD_DEFAULT_PROMPTS = {"argue": {"d6b56e0cfead"}}
 DEFAULTS = {
     # "" = auto: use the SteelSeries Sonar "Chat" output if it exists, else the default output.
     "audio_source": "",
+    # Live recording also records your mic: "" = auto (Sonar Microphone, else the default mic),
+    # "none" = don't, or a specific "in:<device name>".
+    "mic_source": "",
     "listen_seconds": 45,
     "stt_provider": "local",  # local | openai | groq | xai (xai also labels who's talking)
     "local_model": "small.en",
@@ -98,6 +117,7 @@ DEFAULTS = {
     "grok_model": "grok-4.7",
     "check_updates": True,
     "toggle_hotkey": "<ctrl>+<alt>+w",
+    "record_hotkey": "<ctrl>+<alt>+l",
     "presets": DEFAULT_PRESETS,
     "window": {"x": None, "y": None, "w": 440, "h": 640},
 }
@@ -129,6 +149,8 @@ def load(strict: bool = False) -> dict:
     for p in cfg["presets"]:
         if hashlib.sha1(p["prompt"].encode()).hexdigest()[:12] in _OLD_DEFAULT_PROMPTS.get(p["id"], ()):
             p["prompt"] = current[p["id"]]
+        if p["id"] == "argue" and p["name"] == "Argue back":  # old default name; pairs with "Argue for" now
+            p["name"] = "Argue against"
     return cfg
 
 

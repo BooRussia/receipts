@@ -61,6 +61,22 @@ QPushButton#react {{ background: transparent; color: #b9bccb; border: 1px solid 
     padding: 2px 9px; font-size: 11px; }}
 QPushButton#react:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
 #hint {{ color: #6f7386; font-size: 10px; font-weight: 600; }}
+QPushButton#rec {{ background: #1f222c; color: #ff8080; border: 1px solid #4a2b30; border-radius: 9px;
+    padding: 3px 9px; font-size: 11px; font-weight: 700; }}
+QPushButton#rec:hover {{ border-color: #ff6b6b; }}
+QPushButton#rec[recording="true"] {{ background: #e5484d; color: white; border-color: #e5484d; }}
+#live {{ background: #22161a; border-bottom: 1px solid #3a2228; }}
+#liveTitle {{ color: #ff8080; font-size: 11px; font-weight: 700; }}
+#liveLast {{ color: #b4b8c8; font-size: 11px; }}
+#pick {{ background: #1d2029; border: 1px solid #4a4632; border-radius: 12px; }}
+#stmt {{ background: #191b22; border: 1px solid #262936; border-radius: 8px; }}
+#stmt[selected="true"] {{ background: #2a2a1e; border-color: {ACCENT}; }}
+#stmtText {{ color: #c9ccd9; font-size: 12px; }}
+QPushButton#pickMain {{ background: {ACCENT}; color: {BG}; border: none; border-radius: 10px; padding: 3px 10px;
+    font-size: 11px; font-weight: 700; }}
+QPushButton#pickMain:disabled {{ background: #2c2f3b; color: #6b6f80; }}
+QPushButton#link {{ background: transparent; border: none; color: #8b8fa3; font-size: 11px; text-align: left; }}
+QPushButton#link:hover {{ color: {ACCENT}; }}
 QLineEdit#input {{ background: #1b1d25; color: #eceef3; border: 1px solid #30343f; border-radius: 10px;
     padding: 8px 10px; font-size: 13px; }}
 QLineEdit#input:focus {{ border-color: {ACCENT}; }}
@@ -255,6 +271,7 @@ class ReplyCard(QFrame):
         self.reactions.setSpacing(5)
         lay.addLayout(self.reactions)
         self.mode_id: str | None = None  # which mode produced this answer
+        self.own_claim = False  # checking the user's own words: offer "Argue for" first
         self.failed = False
         self.running = True
         self._text = ""
@@ -312,7 +329,9 @@ class ReplyCard(QFrame):
 
     def show_reactions(self, options: list[tuple[str, str]]) -> None:
         """Buttons that re-run another mode on this same clip, e.g. [("roast", "Roast")]."""
-        self.reactions.addWidget(_label("SAME CLIP", "hint", Qt.PlainText))
+        hint = _label("SAME CLIP", "hint", Qt.PlainText)
+        hint.setWordWrap(False)
+        self.reactions.addWidget(hint)
         for preset_id, name in options:
             b = QPushButton(name, objectName="react", cursor=Qt.PointingHandCursor)
             b.setToolTip(f"{name} what was already heard, without grabbing new audio")
@@ -348,6 +367,115 @@ class ReplyCard(QFrame):
 # --- main window -------------------------------------------------------------------------
 
 
+WHO_COLORS = {"you": "#7cc4ff", "them": "#ff9b7a"}
+
+
+class _StatementRow(QFrame):
+    toggled = Signal()
+
+    def __init__(self, line, stamp: str):
+        super().__init__(objectName="stmt")
+        self.line = line
+        self.selected = False
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 5, 8, 5)
+        text = _label("", "stmtText", Qt.RichText)
+        text.setTextInteractionFlags(Qt.NoTextInteraction)  # let clicks reach the row
+        text.setText(f'<span style="color:{WHO_COLORS.get(line.who, "#c9ccd9")}"><b>{line.label}</b></span>'
+                     f'&nbsp;<span style="color:#6f7386">{stamp}</span>&nbsp;&nbsp;{html.escape(line.text)}')
+        lay.addWidget(text)
+
+    def set_selected(self, on: bool) -> None:
+        self.selected = on
+        self.setProperty("selected", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.set_selected(not self.selected)
+            self.toggled.emit()
+
+
+class LivePickCard(QFrame):
+    """The latest live statements, frozen when opened: tap some, then pick what to do with them."""
+
+    chosen = Signal(str, list)  # mode id, the selected LiveLines (oldest first)
+    PAGE = 8
+
+    def __init__(self, lines: list, actions: list[tuple[str, str]], primary: str, clock: Callable[[float], str]):
+        super().__init__(objectName="pick")
+        self._lines, self._clock, self._rows = lines, clock, []
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 12)
+        lay.setSpacing(5)
+        lay.addWidget(_label("📌  PICK WHAT TO CHECK · NEWEST AT THE BOTTOM", "modeTag", Qt.PlainText))
+        self.earlier = QPushButton("↑ Show earlier", objectName="link", cursor=Qt.PointingHandCursor)
+        self.earlier.clicked.connect(self._show_more)
+        lay.addWidget(self.earlier)
+        self.rows = QVBoxLayout()
+        self.rows.setSpacing(4)
+        lay.addLayout(self.rows)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(5)
+        self.buttons = []
+        for mode_id, name in actions:
+            b = QPushButton(name, objectName="pickMain" if mode_id == primary else "react",
+                            cursor=Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, m=mode_id: self._choose(m))
+            self.buttons.append(b)
+            buttons.addWidget(b)
+        buttons.addStretch(1)
+        lay.addLayout(buttons)
+        self._show_more()
+        if self._rows:
+            self._rows[-1].set_selected(True)  # newest statement, ready for one click
+        self._sync()
+
+    def _show_more(self) -> None:
+        shown = len(self._rows)
+        older = self._lines[max(0, len(self._lines) - shown - self.PAGE): len(self._lines) - shown]
+        new_rows = []
+        for line in older:
+            row = _StatementRow(line, self._clock(line.t))
+            row.toggled.connect(self._sync)
+            new_rows.append(row)
+        for i, row in enumerate(new_rows):
+            self.rows.insertWidget(i, row)
+        self._rows = new_rows + self._rows
+        self.earlier.setVisible(len(self._rows) < len(self._lines))
+
+    def _sync(self) -> None:
+        any_selected = any(r.selected for r in self._rows)
+        for b in self.buttons:
+            b.setEnabled(any_selected)
+
+    def _choose(self, mode_id: str) -> None:
+        picked = [r.line for r in self._rows if r.selected]
+        if picked:
+            self.chosen.emit(mode_id, picked)
+
+
+class ActionCard(QFrame):
+    """A short note with a few buttons under it."""
+
+    def __init__(self, markdown: str, buttons: list[tuple[str, Callable[[], None]]]):
+        super().__init__(objectName="heard")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 9, 12, 10)
+        lay.setSpacing(6)
+        lay.addWidget(_label(markdown, "info"))
+        row = QHBoxLayout()
+        row.setSpacing(5)
+        for text, callback in buttons:
+            b = QPushButton(text, objectName="react", cursor=Qt.PointingHandCursor)
+            b.clicked.connect(callback)
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+
 class _Header(QFrame):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton and self.window().windowHandle():
@@ -360,6 +488,7 @@ class ChatWindow(QWidget):
     settings_clicked = Signal()
     clear_clicked = Signal()
     update_clicked = Signal()
+    record_clicked = Signal()
     hidden = Signal()
 
     def __init__(self, level: Callable[[], float], source: Callable[[], tuple[str, str]]):
@@ -399,6 +528,9 @@ class ChatWindow(QWidget):
         self.update_btn.clicked.connect(self.update_clicked.emit)
         self.update_btn.hide()
         hl.addWidget(self.update_btn)
+        self.rec_btn = QPushButton("⏺ Record", objectName="rec", cursor=Qt.PointingHandCursor)
+        self.rec_btn.clicked.connect(self.record_clicked.emit)
+        hl.addWidget(self.rec_btn)
         for text, tip, sig in [("⚙", "Settings", self.settings_clicked), ("⌫", "Clear", self.clear_clicked)]:
             b = QPushButton(text, objectName="icon", toolTip=tip, cursor=Qt.PointingHandCursor)
             b.clicked.connect(sig.emit)
@@ -407,6 +539,19 @@ class ChatWindow(QWidget):
         close.clicked.connect(self.hide)
         hl.addWidget(close)
         col.addWidget(header)
+
+        # Shown only while recording: elapsed time and the latest statement.
+        self.live_bar = QFrame(objectName="live")
+        ll = QVBoxLayout(self.live_bar)
+        ll.setContentsMargins(14, 6, 14, 7)
+        ll.setSpacing(2)
+        self.live_title = _label("", "liveTitle", Qt.PlainText)
+        self.live_last = _label("", "liveLast", Qt.PlainText)
+        self.live_last.setWordWrap(False)
+        ll.addWidget(self.live_title)
+        ll.addWidget(self.live_last)
+        self.live_bar.hide()
+        col.addWidget(self.live_bar)
 
         self.scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -454,14 +599,19 @@ class ChatWindow(QWidget):
             item = self.chips.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.chips.addWidget(_label("NEW CLIP", "hint", Qt.PlainText))
+        self.chip_label = _label("NEW CLIP", "hint", Qt.PlainText)
+        self.chip_label.setWordWrap(False)
+        self.chips.addWidget(self.chip_label)
         for p in presets:
             b = QPushButton(p["name"], objectName="chip", cursor=Qt.PointingHandCursor)
             hk = p.get("hotkey", "")
-            b.setToolTip(f"Grab the latest audio and {p['name'].lower()}" + (f"  ({pretty_hotkey(hk)})" if hk else ""))
+            b.setToolTip(f"{p['name']} the latest audio, or pick a statement while recording"
+                         + (f"  ({pretty_hotkey(hk)})" if hk else ""))
             b.clicked.connect(lambda _=False, pid=p["id"]: self.preset_clicked.emit(pid))
             self.chips.addWidget(b)
         self.chips.addStretch(1)
+        if self.rec_btn.property("recording") == "true":
+            self.chip_label.setText("PICK")
 
     def reveal(self, activate: bool = False) -> None:
         self.show()
@@ -484,6 +634,21 @@ class ChatWindow(QWidget):
         self.update_btn.setText("Updating…")
         self.update_btn.setEnabled(False)
         self.update_btn.show()
+
+    def set_recording(self, on: bool, hotkey: str = "") -> None:
+        self.rec_btn.setText("⏹ Stop" if on else "⏺ Record")
+        self.rec_btn.setToolTip(("Stop recording" if on else "Keep transcribing you and them until you stop")
+                                + (f"  ({pretty_hotkey(hotkey)})" if hotkey else ""))
+        self.rec_btn.setProperty("recording", "true" if on else "false")
+        self.rec_btn.style().unpolish(self.rec_btn)
+        self.rec_btn.style().polish(self.rec_btn)
+        self.chip_label.setText("PICK" if on else "NEW CLIP")
+        self.live_bar.setVisible(on)
+
+    def set_live_status(self, title: str, last: str) -> None:
+        self.live_title.setText(title)
+        self.live_last.setText(self.live_last.fontMetrics().elidedText(
+            last, Qt.ElideRight, max(80, self.live_bar.width() - 30)))
 
     def set_busy(self, busy: bool) -> None:
         self.send.setEnabled(not busy)
@@ -587,6 +752,14 @@ class SettingsDialog(QDialog):
         self.seconds = QSpinBox(minimum=5, maximum=170, suffix=" seconds")
         self.seconds.setValue(int(cfg["listen_seconds"]))
         af.addRow("Grab the last", self.seconds)
+        self.mic = QComboBox()
+        self.mic.setMinimumContentsLength(28)
+        self.mic.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        af.addRow("Your mic", self.mic)
+        mic_hint = QLabel("Only used while ⏺ Record is on, so your own statements show up as “You”.")
+        mic_hint.setWordWrap(True)
+        mic_hint.setStyleSheet("color:#8b8fa3; font-size:11px;")
+        af.addRow(mic_hint)
         lay.addWidget(audio)
         self._fill_sources()
         self.source.currentIndexChanged.connect(lambda _: self._preview(self.source.currentData()))
@@ -662,6 +835,8 @@ class SettingsDialog(QDialog):
             hf.addRow(p["name"], edit)
         self.toggle_edit = QLineEdit(cfg["toggle_hotkey"])
         hf.addRow("Show / hide window", self.toggle_edit)
+        self.record_edit = QLineEdit(cfg.get("record_hotkey", ""))
+        hf.addRow("Start / stop recording", self.record_edit)
         tip = QLabel("Format: <ctrl>+<alt>+f or <ctrl>+<shift>+<f9>. On a Stream Deck, add a Hotkey "
                      "action that presses the same keys.")
         tip.setTextFormat(Qt.PlainText)
@@ -710,14 +885,25 @@ class SettingsDialog(QDialog):
 
     def _fill_sources(self) -> None:
         current = self.source.currentData() if self.source.count() else self.cfg["audio_source"]
+        mic_current = self.mic.currentData() if self.mic.count() else self.cfg.get("mic_source", "")
         self.source.blockSignals(True)
         self.source.clear()
         self.source.addItem("Auto (Sonar Chat if found, else everything you hear)", "")
+        self.mic.clear()
+        self.mic.addItem("Auto (Sonar Microphone if found, else your default mic)", "")
+        self.mic.addItem("Don't record my mic", "none")
         try:
             for key, label in self._list_sources():
                 self.source.addItem(label, key)
+                if key.startswith("in:"):
+                    self.mic.addItem(label, key)
         except Exception as e:  # device enumeration can fail on odd drivers; keep the dialog usable
             self.source.addItem(f"Couldn't list devices: {e}", current)
+        mic_idx = self.mic.findData(mic_current)
+        if mic_idx < 0:
+            self.mic.addItem(f"{mic_current.split(':', 1)[-1]} (not connected)", mic_current)
+            mic_idx = self.mic.count() - 1
+        self.mic.setCurrentIndex(mic_idx)
         idx = self.source.findData(current)
         if idx < 0 and current:
             self.source.addItem(f"{current.split(':', 1)[-1]} (not connected)", current)
@@ -743,7 +929,8 @@ class SettingsDialog(QDialog):
 
     def _save(self) -> None:
         combos = [e.text().strip().lower() for e in self.hotkey_edits] + [self.toggle_edit.text().strip().lower()]
-        bad = [c for c in combos if c and not is_valid(c)]
+        record = self.record_edit.text().strip().lower()
+        bad = [c for c in combos + [record] if c and not is_valid(c)]
         if bad:
             QMessageBox.warning(self, "Hotkeys", "These hotkeys aren't valid:\n\n" + "\n".join(bad)
                                 + "\n\nUse the form <ctrl>+<alt>+f")
@@ -752,6 +939,8 @@ class SettingsDialog(QDialog):
             p["hotkey"] = combo
         self.cfg.update(
             audio_source=self.source.currentData(),
+            mic_source=self.mic.currentData(),
+            record_hotkey=record,
             listen_seconds=self.seconds.value(),
             stt_provider=self.provider.currentData(),
             local_model=self.local_model.currentText().strip(),
