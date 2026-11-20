@@ -14,7 +14,7 @@ fail() {
 find_python() {
     for py in python3.13 python3.12 python3.11 python3.10 \
               /Library/Frameworks/Python.framework/Versions/3.1{3,2,1,0}/bin/python3 \
-              /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
+              /opt/homebrew/bin/python3 /usr/local/bin/python3 "$HOME"/.local/bin/python3.1{3,2,1,0} python3; do
         if command -v "$py" >/dev/null 2>&1 &&
            "$py" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
             echo "$py"
