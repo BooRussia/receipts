@@ -1,4 +1,4 @@
 {
-  "version": "1.5.0",
-  "notes": "Live recording: press ⏺ Record at the top (or Ctrl+Alt+L) to keep transcribing you and them until you stop. Press Fact-check any time to pick recent statements, then Argue for (your points) or Argue against (theirs). Save the transcript when you stop."
+  "version": "1.6.0",
+  "notes": "Receipts now runs on Macs too (menu bar app, ⌃⌥ hotkeys, BlackHole for Discord audio; see README → Setup (Mac)). Also: audio errors are logged once instead of every few seconds."
 }

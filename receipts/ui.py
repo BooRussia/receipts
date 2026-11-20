@@ -2,6 +2,7 @@
 
 import html
 import re
+import sys
 import time
 from typing import Callable
 from urllib.parse import urlparse
@@ -20,6 +21,7 @@ from . import config
 from .hotkeys import is_valid
 from .llm import PROVIDERS
 
+IS_MAC = sys.platform == "darwin"
 ACCENT = "#f5c542"
 BG = "#14151b"
 
@@ -127,6 +129,9 @@ def make_icon() -> QIcon:
 
 def pretty_hotkey(combo: str) -> str:
     parts = [c.strip().strip("<>") for c in combo.split("+") if c.strip()]
+    if IS_MAC:  # ⌃⌥F, the way Mac menus write shortcuts
+        names = {"ctrl": "⌃", "alt": "⌥", "shift": "⇧", "cmd": "⌘", "space": "Space"}
+        return "".join(names.get(c, c.upper()) for c in parts)
     names = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "cmd": "Win", "space": "Space"}
     return "+".join(names.get(c, c.upper()) for c in parts)
 
@@ -497,6 +502,7 @@ class ChatWindow(QWidget):
         self.setWindowIcon(make_icon())
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_MacAlwaysShowToolWindow)  # macOS hides tool windows when another app is in front
         self.setStyleSheet(STYLE)
         self.setMinimumSize(340, 360)
         self._level, self._source = level, source
@@ -744,7 +750,9 @@ class SettingsDialog(QDialog):
         self.meter = QProgressBar(maximum=100, textVisible=False)
         self.meter.setFixedHeight(8)
         af.addRow("Level", self.meter)
-        hint = QLabel("Pick the output Discord plays into. With SteelSeries Sonar that's “SteelSeries Sonar - Chat”. "
+        hint = QLabel("Pick the device Discord plays into: on a Mac, BlackHole (README → Mac setup). "
+                      "Have someone talk in Discord: the bar should bounce." if IS_MAC else
+                      "Pick the output Discord plays into. With SteelSeries Sonar that's “SteelSeries Sonar - Chat”. "
                       "Have someone talk in Discord: the bar should bounce.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8b8fa3; font-size:11px;")
@@ -837,8 +845,9 @@ class SettingsDialog(QDialog):
         hf.addRow("Show / hide window", self.toggle_edit)
         self.record_edit = QLineEdit(cfg.get("record_hotkey", ""))
         hf.addRow("Start / stop recording", self.record_edit)
-        tip = QLabel("Format: <ctrl>+<alt>+f or <ctrl>+<shift>+<f9>. On a Stream Deck, add a Hotkey "
-                     "action that presses the same keys.")
+        tip = QLabel("Format: <ctrl>+<alt>+f or <ctrl>+<shift>+<f9>"
+                     + (" (alt = Option, <cmd> = Command)." if IS_MAC else ".")
+                     + " On a Stream Deck, add a Hotkey action that presses the same keys.")
         tip.setTextFormat(Qt.PlainText)
         tip.setWordWrap(True)
         tip.setStyleSheet("color:#8b8fa3; font-size:11px;")
@@ -888,9 +897,11 @@ class SettingsDialog(QDialog):
         mic_current = self.mic.currentData() if self.mic.count() else self.cfg.get("mic_source", "")
         self.source.blockSignals(True)
         self.source.clear()
-        self.source.addItem("Auto (Sonar Chat if found, else everything you hear)", "")
+        self.source.addItem("Auto (BlackHole or Loopback if found)" if IS_MAC
+                            else "Auto (Sonar Chat if found, else everything you hear)", "")
         self.mic.clear()
-        self.mic.addItem("Auto (Sonar Microphone if found, else your default mic)", "")
+        self.mic.addItem("Auto (your default mic)" if IS_MAC
+                         else "Auto (Sonar Microphone if found, else your default mic)", "")
         self.mic.addItem("Don't record my mic", "none")
         try:
             for key, label in self._list_sources():

@@ -1,7 +1,9 @@
 """Always-on capture of one audio source into a rolling in-memory buffer.
 
 On Windows, every output device can be recorded with WASAPI loopback, so picking the
-"SteelSeries Sonar - Chat" output records exactly what Discord plays and nothing else.
+"SteelSeries Sonar - Chat" output records exactly what Discord plays and nothing else. macOS can't
+record another app's output directly, so there Discord plays into a virtual device (BlackHole) and
+we record that like a microphone.
 Nothing is written to disk; the buffer only ever holds the last couple of minutes.
 """
 
@@ -17,6 +19,11 @@ log = logging.getLogger(__name__)
 SAMPLE_RATE = 16000  # what Whisper wants; WASAPI resamples for us
 BUFFER_SECONDS = 180
 IS_WINDOWS = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+# Virtual devices that carry other apps' audio on a Mac.
+_VIRTUAL = ("blackhole", "loopback", "soundflower", "vb-cable")
+NO_MAC_DEVICE = ("No Discord audio found. On a Mac, install BlackHole and send Discord's sound to it "
+                 "(README → Mac setup).")
 
 
 def _soundcard():
@@ -31,6 +38,17 @@ def _all_devices():
     return sc.all_microphones(include_loopback=True) if IS_WINDOWS else sc.all_microphones()
 
 
+def _is_virtual(dev) -> bool:
+    return any(v in dev.name.lower() for v in _VIRTUAL)
+
+
+def has_virtual_device() -> bool:
+    try:
+        return any(_is_virtual(d) for d in _all_devices())
+    except Exception:  # device listing failed; the header will show the audio error anyway
+        return False
+
+
 def _key(dev) -> str:
     return ("out:" if getattr(dev, "isloopback", False) else "in:") + dev.name
 
@@ -41,6 +59,8 @@ def list_sources() -> list[tuple[str, str]]:
     for dev in _all_devices():
         if getattr(dev, "isloopback", False):
             out.append((_key(dev), f"🔊 {dev.name}  (what it plays)"))
+        elif IS_MAC and _is_virtual(dev):
+            out.append((_key(dev), f"🔊 {dev.name}  (other apps' audio)"))
         else:
             out.append((_key(dev), f"🎤 {dev.name}"))
     return out
@@ -60,7 +80,11 @@ def _resolve(key: str, auto: str = "chat"):
             name = dev.name.lower()
             if not getattr(dev, "isloopback", False) and "sonar" in name and "microphone" in name:
                 return dev
-        return sc.default_microphone()
+        default = sc.default_microphone()
+        if not _is_virtual(default):
+            return default
+        # The default input is a virtual device (it carries Discord, not you): use a real mic.
+        return next((d for d in devices if not getattr(d, "isloopback", False) and not _is_virtual(d)), default)
     # Auto chat: Sonar's Chat channel if present, otherwise whatever is playing on the default output.
     for dev in devices:
         name = dev.name.lower()
@@ -71,7 +95,12 @@ def _resolve(key: str, auto: str = "chat"):
         for dev in devices:
             if getattr(dev, "isloopback", False) and dev.name == default_out:
                 return dev
-    return sc.default_microphone()
+        return sc.default_microphone()
+    # Mac: a virtual device Discord plays into. Never fall back to a real mic, which would record you.
+    for dev in devices:
+        if _is_virtual(dev):
+            return dev
+    raise RuntimeError(NO_MAC_DEVICE)
 
 
 class _Ring:
@@ -184,6 +213,8 @@ class AudioListener:
                         rms = float(np.sqrt(np.mean(np.square(mono)))) if len(mono) else 0.0
                         self.level = max(rms, self.level * 0.8)
             except Exception as e:
-                log.exception("Audio capture failed")
-                self.source_name, self.error, self.level = "", str(e) or type(e).__name__, 0.0
+                message = str(e) or type(e).__name__
+                if message != self.error:  # it retries every few seconds; say each new problem once
+                    log.warning("Audio capture failed: %s", message, exc_info=not isinstance(e, RuntimeError))
+                self.source_name, self.error, self.level = "", message, 0.0
                 self._switch.wait(3)

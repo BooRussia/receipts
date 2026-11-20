@@ -8,6 +8,16 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from . import config
 
 
+def _menu_bar_only() -> None:
+    """On a Mac, live in the menu bar like other utilities instead of showing a Python icon in the Dock."""
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except Exception:  # cosmetic; never worth failing over
+        logging.getLogger(__name__).debug("Couldn't hide the Dock icon", exc_info=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="receipts", description="Hotkey fact-checker for voice chat.")
     parser.add_argument("--no-hotkeys", action="store_true", help="don't register global hotkeys")
@@ -24,6 +34,8 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
+    if sys.platform == "darwin":
+        _menu_bar_only()
     app.setQuitOnLastWindowClosed(False)  # closing the popup just hides it; quit from the tray
 
     from .ui import apply_theme

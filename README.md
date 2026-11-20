@@ -3,8 +3,9 @@
 Your friend says something confidently wrong in Discord. You hit **Ctrl+Alt+F**. A little window pops up
 with what he just said, a verdict, the facts, a line you can read out loud, and sources.
 
-How it works: Receipts sits in the system tray and keeps the last ~3 minutes of one audio source in memory
-(for you, the **SteelSeries Sonar - Chat** output, which carries only Discord). When you press a hotkey it
+It runs on Windows and macOS. How it works: Receipts sits in the system tray (the menu bar on a Mac) and keeps
+the last ~3 minutes of one audio source in memory: on Windows the **SteelSeries Sonar - Chat** output, on a
+Mac the **BlackHole** device Discord plays into. Either way, it hears only Discord. When you press a hotkey it
 takes the last 45 seconds, transcribes them, and has Claude or Grok (your pick) fact-check the claim with
 live web search.
 
@@ -26,6 +27,31 @@ live web search.
 The first fact-check also downloads the speech model (~500 MB) once.
 
 To start it with Windows, press `Win+R`, type `shell:startup`, and drop a shortcut to `Start Receipts.bat` there.
+
+## Setup (Mac)
+
+Macs can't record another app's sound directly, so Discord plays into a free virtual audio device,
+**BlackHole**, and Receipts listens to that. You still hear everything as normal.
+
+1. Install **Python 3.12** from [python.org](https://www.python.org/downloads/macos/) (the macOS installer).
+2. Install **BlackHole 2ch** from [existential.audio/blackhole](https://existential.audio/blackhole/) (free), or
+   with Homebrew: `brew install blackhole-2ch`.
+3. Open **Audio MIDI Setup** (Applications → Utilities). Click **+** at the bottom left →
+   **Create Multi-Output Device**. Tick your headphones (or speakers) **and** BlackHole 2ch. Put your
+   headphones first, and tick **Drift Correction** next to BlackHole.
+4. In **Discord** → Settings → Voice & Video → **Output Device**, pick **Multi-Output Device**. Only send
+   Discord there, so Receipts hears just Discord. (The keyboard volume keys don't work on a Multi-Output
+   Device; use Discord's Output Volume slider instead.)
+5. Get an API key for Claude or Grok (see the Windows steps above).
+6. Double-click **`Start Receipts.command`**. The first run sets everything up (a few minutes). If macOS
+   says it can't open a file from the internet, right-click it → **Open** → **Open**.
+7. When macOS asks whether **Terminal** may use the microphone, click **Allow**. Receipts needs that to
+   hear BlackHole, and your mic for live recordings.
+8. Receipts lives in the **menu bar** as a gold receipt. Click **⚙**, paste your key, and check that
+   **Audio source** shows BlackHole: the Level bar should bounce when someone talks in Discord.
+
+On a Mac the hotkeys are the same keys with Control and Option: **⌃⌥F**, **⌃⌥D**, **⌃⌥R**, **⌃⌥L**, **⌃⌥W**.
+They don't need any extra permission.
 
 ## Using it
 
@@ -110,6 +136,10 @@ Haiku, grok-4.3) cost less. Local transcription is free.
   someone talks.
 - **The window doesn't show over my game**: games in *exclusive* fullscreen draw over everything. Switch the
   game to *borderless windowed*.
+- **Mac: "No Discord audio found"**: BlackHole isn't installed, or Discord isn't playing into it. Follow
+  Setup (Mac) steps 2–4.
+- **Mac: the Level bar never moves**: macOS hasn't let Terminal use the microphone. System Settings →
+  Privacy & Security → Microphone → turn on **Terminal**, then restart Receipts.
 - **A hotkey does nothing**: another app may already use that combination. Pick a different one in ⚙ Settings.
 - Anything else: ⚙ Settings → **Open log**.
 

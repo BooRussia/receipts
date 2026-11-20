@@ -84,11 +84,16 @@ def install(release: Release) -> None:
 
 
 def relaunch() -> None:
-    """Start a fresh copy (after the current one exits) through the launcher."""
+    """Start a fresh copy (after the current one exits) through the launcher.
+
+    The launcher reinstalls packages if requirements.txt changed, then starts the app.
+    """
     if sys.platform == "win32":
-        # The launcher reinstalls packages if requirements.txt changed, then starts the app.
         subprocess.Popen(["cmd", "/c", "call", "Start Receipts.bat", "--after-update"], cwd=APP_DIR,
                          creationflags=subprocess.CREATE_NEW_CONSOLE)
+    elif (APP_DIR / "Start Receipts.command").exists():
+        subprocess.Popen(["/bin/bash", "Start Receipts.command", "--after-update"], cwd=APP_DIR,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
     else:
         subprocess.Popen([sys.executable, "-m", PACKAGE, "--after-update"], cwd=APP_DIR, start_new_session=True)
 
@@ -119,6 +124,8 @@ def _copy_file(src: Path, dst: Path) -> None:
         dst.write_bytes(text)
     else:
         shutil.copyfile(src, dst)
+    if src.suffix.lower() in (".command", ".sh"):  # zip extraction drops the executable bit
+        dst.chmod(0o755)
 
 
 def _get(url: str) -> bytes:

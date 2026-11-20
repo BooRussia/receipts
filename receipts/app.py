@@ -14,7 +14,7 @@ from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import config, updater
-from .audio import AudioListener, list_sources
+from .audio import IS_MAC, AudioListener, has_virtual_device, list_sources
 from .hotkeys import Hotkeys
 from .live import LiveSession, clock, format_lines
 from .llm import first_message, friendly_error, provider_key, reaction_message, stream_reply
@@ -631,4 +631,7 @@ class Controller(QObject):
             lines.append(f"- **{pretty_hotkey(self.cfg['toggle_hotkey'])}**  show / hide this window")
         if not provider_key(self.cfg):
             lines += ["", "⚠️ **First:** open ⚙ Settings, pick Claude or Grok, and paste that API key."]
+        if IS_MAC and not self.cfg["audio_source"] and not has_virtual_device():
+            lines += ["", "🍎 **To hear Discord on a Mac**, set up BlackHole once (README → Mac setup). "
+                          "Until then, typed claims still work."]
         self.window.add_info("\n".join(lines))
